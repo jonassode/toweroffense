@@ -1,0 +1,260 @@
+<!DOCTYPE html> 
+<html>
+  <head>
+    <script src='http://meeples.se/javascript/jspath-003.js' ></script>
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.8.3/jquery.min.js"></script>
+    <script src="jaws.js"></script>
+    <script src="spacebase.js"></script>
+    <script src="spacebaserobots.js"></script>
+    <script src="spacebasejobs.js"></script>
+    <script src="spacebasemenu.js"></script>
+    <script src="spacebasebuildings.js"></script>
+
+    <link type="text/css" rel="stylesheet" href="style.css" />
+    <title>Space Base</title>
+  </head>
+<body>
+
+  <canvas width=840 height=480 onclick="x();"></canvas>
+  FPS: <span id="fps"></span>.
+  
+  <div id="info">
+    <h1>Space Base</h1>
+    Imagine Dwarf Fortress meets Dungeon Keeper meets MS3TK meets Prison Architect. In Space. With lots of Robots.<br>
+    Add in all your favorite Sci-Fi B-Movie creatures. That's Space Base.<br>
+    <br>
+    Digging, Building and Lazering your way to fame and fortune, or at least survival.<br>
+  </div>
+  
+  <h3>jaws log</h3>
+  <div id="jaws-log"></div>
+ 
+  <script>
+    function getAvailableWorker(goal){
+	var workers = spacebase.workers;
+	var availableWorker;
+	var steps;
+	var shortest_path;
+
+	workers.forEach(
+		function(worker){
+			if(worker.state == spacebase.STATE_IDLE){
+				if ( goal ){
+					var path = worker.find_path(goal);
+					if ( path.length > 0 && ( !steps || steps > path.length )){				
+						availableWorker = worker;
+						shortest_path = path;
+						steps = path.length;
+					}
+				} else {
+					availableWorker = worker;
+				}
+			};
+		}
+	);
+
+	return availableWorker;
+    }
+
+    function withinTileMap(col, row){
+
+	if ( col >= 0 && col < spacebase.tile_map.size[0] && row >= 0 && row < spacebase.tile_map.size[1] ){
+		return true;
+	} else {
+		return false;
+	}
+    }
+
+    function x(){
+
+	// Get Coordinates
+	var col = getTileNoFromCord(jaws.mouse_x);
+	var row = getTileNoFromCord(jaws.mouse_y);
+
+	// Create Job
+	if ( withinTileMap(col, row)){
+		// Check if there is a job at this place.
+		var job = spacebase.tile_map.job(col, row);
+		// Job exists on this place we remove it
+		if ( job ){
+			job.die();
+		// Else we create one
+		} else if ( spacebase.selection.item ){
+			var job = spacebase.job(spacebase.selection.item.jobtype, spacebase.selection.item.target, col, row);
+			// Add Job to jobs list
+			if ( job.type.legal(job) ){
+				job.add();
+			}
+		}
+	} else {
+		// Check click for menu.
+		spacebase.action_menu.select_item(jaws.mouse_x, jaws.mouse_y);
+	}
+
+    }
+
+    function getTileNoFromCord(cord){
+	return Math.floor(cord / spacebase.tile_map.cell_size[0]);
+    }
+
+    function exportTileMapToPathMatrix(){
+	var cols = spacebase.tile_map.size[0]
+	var rows = spacebase.tile_map.size[1]
+	var matrix = jspath.create_matrix(rows,cols);
+	var cell_size = spacebase.tile_map.cell_size[0];
+
+	for( row = 0; row < matrix.length; row++) {
+		for( col = 0; col < matrix[row].length; col++) {
+			// Set it to walkable ( 1 ) by default
+			matrix[row][col] = 1;			
+			
+			if ( spacebase.tile_map.check(col,row, "blocking", true)) {
+				matrix[row][col] = 0;
+			}
+		}
+	}
+	return matrix;
+    }
+
+    function Main() {
+      var action_menu = spacebase.menu(641, 0)
+      var buildings = new jaws.SpriteList()
+      var blocks = new jaws.SpriteList()
+      var fps
+      var workers = new jaws.SpriteList()
+      workers.push(spacebase.robot(0,0))
+      //workers.push(spacebase.robot(0,64))
+      //workers.push(spacebase.robot(0,128))
+      var jobs = new jaws.SpriteList()
+
+      /* Called once when a game state is activated. Use it for one-time setup code. */
+      this.setup = function() {
+        fps = document.getElementById("fps")
+        
+	var tilemap_width = 20;
+	var tilemap_height = 15;
+
+	// Get some Random terrain
+	for ( var j = 0; j < tilemap_height; j++){
+		for ( var i = 0; i <tilemap_width; i++){
+			var x = i*32;
+			var y = j*32;
+
+			if ( Math.floor((Math.random()*10)+1) > 8 && x != 0 ){
+			        blocks.push( new Sprite({image: "images/block.png", x: x, y: y, blocking: true }) )
+			} else {
+				blocks.push( new Sprite({image: "images/dirt.png", x: x, y: y, blocking: false}) )
+			}
+		}
+	}
+
+	action_menu.add( new Sprite({image: "images/button_floor.png" }), spacebase.JOB_BUILD, "floor");
+	action_menu.add( new Sprite({image: "images/button_wall.png" }), spacebase.JOB_BUILD, "wall");
+	action_menu.add( new Sprite({image: "images/button_solarpanel.png" }), spacebase.JOB_BUILD, "solarpanel");
+
+        // A tilemap, each cell is 32x32 pixels. There's 10 such cells across and 10 downwards.
+        var tile_map = new jaws.TileMap({size: [tilemap_width,tilemap_height], cell_size: [32,32]})
+
+	// Extending Tilemap
+	tile_map.check = function(col, row, option, value){
+		var checked_value = false;
+		this.cell(col,row).forEach(function(item){
+			if ( item.options[option] == value){
+				checked_value = true;
+			}
+		});
+		return checked_value;
+	}
+
+	// Extending Tilemap
+	tile_map.job = function(col, row){
+		var found_job;
+		spacebase.jobs.forEach(function(item){
+			if ( item.col == col && item.row == row ){
+				found_job = item;
+			}
+		});
+		return found_job;
+	}
+
+        // Fit all items in array blocks into correct cells in the tilemap
+        // Later on we can look them up really fast (see player.move)
+        tile_map.push(blocks)
+
+        jaws.context.mozImageSmoothingEnabled = false;  // non-blurry, blocky retro scaling
+        jaws.preventDefaultKeys(["up", "down", "left", "right", "space"])
+
+        spacebase.tile_map = tile_map;
+	spacebase.workers = workers;
+	spacebase.jobs = jobs;
+	spacebase.buildings = buildings;
+	spacebase.action_menu = action_menu;
+
+	// For Debugging
+	jaws.on_keydown("r", function(){spacebase.workers.push(new spacebase.robot(0,0))})
+      }
+
+      /* update() will get called each game tick with your specified FPS. Put game logic here. */
+      this.update = function() {
+
+	spacebase.workers.forEach(function(worker){
+		worker.act();
+	});
+
+	spacebase.jobs.forEach(function(job){
+		// Start job
+		if ( job.started == false ) {
+			// Only look at the jobs if there are at least one available worker
+			if ( getAvailableWorker() != undefined ){
+				job.start();
+			}
+		}
+	});
+
+
+
+        //jaws.forceInsideCanvas(player)
+        fps.innerHTML = jaws.game_loop.fps
+      }
+
+      /* Directly after each update draw() will be called. Put all your on-screen operations here. */
+      this.draw = function() {
+        jaws.clear()
+        blocks.draw()
+	buildings.draw()
+	jobs.draw()
+        workers.draw()
+	action_menu.draw()
+
+	if ( spacebase.selection.item != undefined ){
+		spacebase.selection.draw();
+	}
+
+        // uncomment to show bounding box rects
+        //blocks.forEach( function(item, total) { item.rect.draw() })
+        //player.rect.draw()
+      }
+    }
+    
+    jaws.onload = function() {
+      jaws.unpack()
+      jaws.assets.add([
+	"images/droid_11x15.png",
+	"images/block.png",
+	"images/dirt.png",
+	"images/job_default.png",
+	"images/building_wall.png",
+	"images/building_floor.png",
+	"images/button_wall.png",
+	"images/button_floor.png",
+	"images/button__selector.png",
+	"images/button_solarpanel.png",
+	"images/building_solarpanel.png"
+	])
+      jaws.start(Main)  // Our convenience function jaws.start() will load assets, call setup and loop update/draw in 60 FPS
+    }
+  </script>
+
+</body>
+</html>
+
